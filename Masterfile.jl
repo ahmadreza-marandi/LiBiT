@@ -27,19 +27,10 @@ end
 function eye(n)
 	Matrix{Float64}(I,n,n);
 end
-function discrete_Mixed_logit_function_i(p::Vector,i,n)
-	#component of the discrete mixed logit inside the summations for alternatives and customers
-	#p is the cost Vector
-	#i is the index of the alternative service
-	#n is the index of the customer
-	f=(1/R)*(sum((exp(Beta_parameter[i,n,r]*p[i]+q_parameter[i,n,r])/(1+ sum(exp(Beta_parameter[j,n,r]*p[j]+q_parameter[j,n,r]) for j=2:NUM_POINTS))) for r=1:R)) 
+function Distribution_function(p::Vector)
+	#objective function related to MNL
+	f=sum( p[i]*( exp(Beta_parameter[i,n]*p[i]+q_parameter[i,n])/(sum(exp(Beta_parameter[j,n]*p[j]+q_parameter[j,n]) for j=1:NUM_POINTS)))  for n=1:N, i=2:NUM_POINTS)		
 	return f;
-
-end
-function discrete_Mixed_logit_function(p::Vector)
-	#objective function of the discrete mixed logit 
-	#p is the cost Vector
-	return sum(p[i]*discrete_Mixed_logit_function_i(p,i,n) for i=1:NUM_POINTS,n=1:N);
 end
 function homogenious_MNL(time_limit)
 	# Algorithm 2 of the paper Li et al. (2019)
@@ -176,7 +167,7 @@ end
 
 function solve_local_opt(type_of_problem,time_limit)
 	#returning the optimal value by conducting branching
-	# type_of_problem is whether the problem is "Mixed" (for continuous mixed logit problem), "MNL" (for multinomial logit problem), or "Discrete" (for discrete mixed logit)
+	# type_of_problem is whether the problem is "Mixed" (for continuous mixed logit problem), or "MNL" (for multinomial logit problem),
 	#time_limit is the time limit in seconds
 	iteration_history=[-Inf Inf 0];
 	break_points=[Float64.(LB_p)];
@@ -249,9 +240,6 @@ function solve_local_opt(type_of_problem,time_limit)
 					elseif type_of_problem=="Mixed" 
 						obj_fun=Mixed_logit_function;
 						obj_fun_i=Mixed_logit_function_i;
-					elseif type_of_problem == "Discrete"
-						obj_fun=discrete_Mixed_logit_function;
-						obj_fun_i=discrete_Mixed_logit_function_i;
 					end
 					#finding the lower bound
 					Bestf_leaf[i,j],Best_solution_leaf[i,j]=trust_region_iteration(A_leaf[i,j],b_leaf[i,j],Tolerr,obj_fun,initial_point,time_limit-time_elapsed)
@@ -409,11 +397,9 @@ function trust_region_iteration(A,b,Tolerr,obj_fun::Function ,initial_point,time
 			f1=obj_fun(p1);
 			radius=1;
 			time_elapsed=time_elapsed+CPUtoq();
-			display(p1)
 		end
 		radius=radius/2;
     end
-    chomp(readline())
     return f0,initial_p;
 end
 function randomPoint(A,b,p_0,LB_p,UB_p)
