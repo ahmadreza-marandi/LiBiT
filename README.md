@@ -23,8 +23,21 @@ For this project, we use multiple Julia packages. The code has been updated and 
 * NLopt v0.6.2 (https://github.com/JuliaOpt/NLopt.jl)
 
 ## Data
-This package contains many data related to pricing problems related to parking choice. In the Data.jl file, we store all the used data in the paper and in this section we discuss how to use them.
-All the data are store in a function format. So, in order to generate the parameters, you may need to call the function with suitable arguments. 
-* ``` Logit_10() ```: 
+This package contains many data related to pricing problems related to parking choice. In the Data.jl file, we store all the used data in the paper and in this section we discuss how to use them. All the codes return the following outputs:
+* Beta_parameter: a matrix whose rows are related to the parking choices (FSP, PSP, and PUP) and columns are related to customer classes. This matrix represents $`\beta^p_{in}`$.
+* q_parameter: a matrix whose rows are related to the parking choices (FSP, PSP, and PUP) and columns are related to customer classes. This matrix represents $`q_{in}`$.
+* NUM_POINTS: This is the diemension of the problem. 
+* N: This is the number of customer classes.
+* UB_p: This is the vector containing the upper bounds on the prices
+* LB_p: This is the vector containing the lower bounds on the prices.
 
+All the data are store in a function format. So, in order to generate the parameters, you may need to call the function with suitable arguments. 
+* ``` Logit_10() ``` returns the tuple (Beta_parameter,q_parameter,NUM_POINTS,N,UB_p,LB_p) for MNL model with N=10;
+* ``` Logit_50() ``` returns the tuple (Beta_parameter,q_parameter,NUM_POINTS,N,UB_p,LB_p) for MNL model with N=50;
+* ``` Mixed_Logit_10(β) ``` returns the tuple (Beta_parameter,q_parameter,NUM_POINTS,N,UB_p,LB_p) for Mixed Logit model with N=10, given the value β.
+* ``` Mixed_Logit_50(β) ``` returns the tuple (Beta_parameter,q_parameter,NUM_POINTS,N,UB_p,LB_p) for Mixed Logit model with N=50, given the value β.
+* ``` Mixed_Logit_n10_random(R_AT) ``` returns the tuple (Beta_parameter,q_parameter,NUM_POINTS,N,R,UB_p,LB_p) for discrete Mixed Logit model with R_AT number of points with N=10 customer classes. For this function R_AT can be 10, 100, 1000, 10000, 100000, 1000000. 
+
+
+## Functions and their features
 
