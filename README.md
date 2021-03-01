@@ -1,5 +1,5 @@
 # Static_Pricing_problem
-Codes related to the paper: A. Marandi, V Lurkin (2020), Static Pricing Problems under Mixed Multinomial Logit Demand
+Codes related to the paper: A. Marandi, V Lurkin (2020), Static Pricing Problems under Mixed Multinomial Logit Demand (https://arxiv.org/abs/2005.07482).
 
 In case of using these codes, you are obliged to properly cite the paper.  
 
@@ -7,6 +7,7 @@ In case of using these codes, you are obliged to properly cite the paper.
 * [Technologies](#technologies)
 * [Data](#Data)
 * [Functions and their features](#Functions-and-their-features)
+* [Examples](#Examples)
 
 ## Technologies
 For this project, we use multiple Julia packages. The code has been updated and tested on Julia 1.5.3. The packages and the tested versions are listed below:
@@ -21,6 +22,7 @@ For this project, we use multiple Julia packages. The code has been updated and 
 * Cuba v2.2.0 (https://github.com/giordano/Cuba.jl)
 * FiniteDiff v2.8.0 (https://github.com/JuliaDiff/FiniteDiff.jl)
 * NLopt v0.6.2 (https://github.com/JuliaOpt/NLopt.jl)
+* SCIP v0.9.6 (https://github.com/scipopt/SCIP.jl): make sure to instal SCIP beforehand.
 
 ## Data
 This package contains many data related to pricing problems related to parking choice. In the Data.jl file, we store all the used data in the paper and in this section we discuss how to use them. All the codes return the following outputs:
@@ -40,4 +42,7 @@ All the data are store in a function format. So, in order to generate the parame
 
 
 ## Functions and their features
-
+This package contains many functions. In this section we discuss each functions, what they do, and how they can be used:
+* ``` discrete_Mixed_logit_function(p) ``` returns the objective value of the Discrete Mixed Logit model at point p. 
+* ``` Distribution_function(p) ``` returns the objective value of the MNL model at point p.
+* ``` homogenious_MNL(time_limit) ``` returns the ...
