@@ -50,4 +50,24 @@ This package contains many functions. In this section we discuss each functions,
 * ``` Mixed_logit_function(p::Vector) ``` returns the objective value of the pricing problem with a continuous logit model. To use this function, the following considerations are needed:
   * this function uses the function ``` Mixed_Logit_distribution(p,β,i) ```. The data of the logit model should be put here. In the first line of this function, the data is acquared (for instance Mixed_Logit_50(β)). Then, the information about the distribution of β should be given. Currently we use the normal distrbution Normal(μ, Σ) using the code ``` pdf(MvNormal(μ, Σ), β) ```.
   * to take the derivative, we need a bound. These are the vectors ``` a ``` (lower bounds on β) and ``` b ``` (upper bound on β) inside the function ``` Mixed_logit_function_i(p, i) ```.
-* 
+* ``` Mixed_logit_function_discreteDis(p::Vector) ``` returns the value of the discretize relaxation of the continuous mixed logit at point p. For this fucntion the following considerations are needed:
+   * all the information about the data is given in the function ``` Mixed_logit_function_i_discreteDis(p::Vector, i) ```. In this function, we currently use the data for ``` Mixed_logit_50 ``` function where the box determined with  ``` a ``` (lower bounds on β) and ``` b ``` (upper bound on β) are discritized by $`R^2`$ points. You need to specify ``` R ``` in this function (default value is 10);
+* ```  cuts(Scenario)  ``` retunrs a 2-tuple. This functions generate the cut to be used in Voronoi diagram. Input: set of scenario in the form of ``` Array{Array{Float64,2},1} ``` (each component is a scenario); Output: first output is a matrix A and the second output is the vector b together generate cuts in the form Aξ⫺b.
+* ``` solve_local_opt(type_of_problem,time_limit) ``` returns a 4-tuple. This fucntion is the implimentation of LiBiT in our paper. Input: type_of_problem is string with values either MNL, Mixed, or Discrete, time_limit is the time limit in seconds for LiBiT. Output: element 1 is the lower bound on the optimal value, element 2 is the best obtain solution, element 3 is the upper bound on the optimal value, element 4 is the list containing the information extracted from LiBiT after each iteration.
+   * MNL: uses the fucntions ``` Distribution_function ``` and ``` Distribution_function_i ```
+   * Mixed: uses the functions ``` Mixed_logit_function ``` and ``` Mixed_logit_function_i ```
+   * Discrete: uses the fucntions ``` Mixed_logit_function_discreteDis ``` and ``` Mixed_logit_function_i_discreteDis ```.
+ 
+In LiBit, we use different methods. The rest of functions are the ones used each iteration of LiBiT:
+* ``` trust_region_iteration(A,b,Tolerr,obj_fun::Function ,initial_point,time_limit) ```: In LiBiT we use the trust region approach. This function performs one iteration of the trust region approach. In other words, it gets matrix A and vector b (to define the feasible region Ap⩾b), and the objective function ``` obj_fun ```. Given the initial solution ``` initial_point ``` and within time limt time_limit, it finds the best solution using trust region method with tolorence error of Tolerr. The function returns the solution obtain from one iteration of trust region method (2nd element) and the corresponding objective value (1st element). 
+* ``` randomPoint(A,b,p_0,LB_p,UB_p) ```: in LiBiT, we may use random feasible point selection. So, this function returns a (random) solution inside feasible region Ap⩾b, and given vectors of lower bound LB_p and upper bound UB_p (for p). The fucntion trys to find either a point close to the p_0 on the other half of the feasible region or a random point. 
+* ``` overestimator_general(A,b,P_0::Array{Array{Float64,2},1},obj_fun::Function,LB_τ,UB_τ,LB_p,UB_p,N,time_limit) ``` is the function related to problem (12). 
+   * Ax⫺b, p⩾0 is the feasible region
+   * P_0 is the ser of points 
+   * obj_fun is the objective function
+   * LB_τ,UB_τ,LB_p,UB_p are the corresponding lower and upper bounds of p and τ
+   * N is the number of customer classes
+   * time_limit is the limit on time in seconds
+
+   The output will be the upper bound on the optimal value. 
+   
