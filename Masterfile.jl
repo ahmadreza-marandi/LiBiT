@@ -1,4 +1,4 @@
-# Julia 1.0.5
+# Julia 1.5.3
 #This document contains codes written for the paper
 # A. Marandi, V Lurkin (2020), Static Pricing Problems under Mixed Multinomial Logit Demand
 #written by Ahmadreza Marandi
@@ -11,12 +11,13 @@ using JuMP
 using CPLEX
 using MAT
 using CPUTime
-using Cubature
+# using HCubature
 using JLD
 using Distributions
 using Cuba
 using FiniteDiff
 using NLopt
+using SCIP
 
 struct MyProblem
 	model
@@ -27,14 +28,41 @@ end
 function eye(n)
 	Matrix{Float64}(I,n,n);
 end
+function discrete_Mixed_logit_function_i(p::Vector,i)
+	#component of the discrete mixed logit inside the summations for alternatives and customers
+	#p is the cost Vector
+	#i is the index of the alternative service
+	f=(1/R)*sum(sum((exp(Beta_parameter[i,n,r]*p[i]+q_parameter[i,n,r])/(1+ sum(exp(Beta_parameter[j,n,r]*p[j]+q_parameter[j,n,r]) for j=2:NUM_POINTS))) for r=1:R) for n=1:N) 
+	return f;
+
+end
+function discrete_Mixed_logit_function(p::Vector)
+	#objective function of the discrete mixed logit 
+	#p is the cost Vector
+	return sum(p[i]*discrete_Mixed_logit_function_i(p,i) for i=1:NUM_POINTS);
+end
 function Distribution_function(p::Vector)
 	#objective function related to MNL
 	f=sum( p[i]*( exp(Beta_parameter[i,n]*p[i]+q_parameter[i,n])/(sum(exp(Beta_parameter[j,n]*p[j]+q_parameter[j,n]) for j=1:NUM_POINTS)))  for n=1:N, i=2:NUM_POINTS)		
 	return f;
 end
-function homogenious_MNL(time_limit)
+function Distribution_function_NLopt(p::Vector, grad::Vector)
+	# the objective function used in NLopt package for discrete mixed logit
+	if length(grad) > 0 #gradient calculations
+		g = x -> FiniteDiff.finite_difference_gradient(Distribution_function, x);
+		grad=g(p);
+	end
+	return sum( p[i]*( exp(Beta_parameter[i,n]*p[i]+q_parameter[i,n])/(sum(exp(Beta_parameter[j,n]*p[j]+q_parameter[j,n]) for j=1:NUM_POINTS)))  for n=1:N, i=2:NUM_POINTS)
+end
+
+function Distribution_function_i(p::Vector,i)
+	# objective fucntion of the discrete mixed logit
+	f= 1/sum(1/sum(exp((Beta_parameter[j,n]*p[j]-Beta_parameter[i,n]*p[i])+q_parameter[j,n]-q_parameter[i,n]) for j=1:NUM_POINTS) for n=1:N); 
+	return f;
+end
+function homogenious_MNL(time_limit,data_function::Function,R_AT)
 	# Algorithm 2 of the paper Li et al. (2019)
-	Beta_parameter,q_parameter,NUM_POINTS,N,R,UB_p,LB_p=Mixed_Logit_n10_r100();
+	Beta_parameter,q_parameter,NUM_POINTS,N,R,UB_p,LB_p=data_function(R_AT);
 	#considering one customer behaviour
 	b=Array{Float64,2}(-Beta_parameter[:,1,:]);
 	a=Array{Float64,2}(q_parameter[:,1,:]); 
@@ -84,30 +112,50 @@ function homogenious_MNL(time_limit)
 		# opt.xtol_rel = 1e-;
 		opt.maxtime= time_limit-time_elapsed;
 		opt.max_objective = π_obj;
-		(maxf,α_p,ret) = optimize(opt, [1])
+		(maxf,α_p,ret) = NLopt.optimize(opt, [1])
 		maxf=π_obj(α_p[1]);
 		hatp_1=hatp_1+α_p[1]*d;
 		diff=norm(α_p[1]*d);
 		time_elapsed = time_elapsed+ CPUtoc();
 	end
+	return [maxf,hatp_1]
 end
-function Mixed_Logit_distribution(p::Vector,β::Vector,i)
+function SCIP_degenerate(function_data::Function, time_limit)
+	model = Model(SCIP.Optimizer)
+	set_optimizer_attribute(model, "limits/time", time_limit)
+	set_optimizer_attribute(model,"display/verblevel",5)
+	Beta_parameter,q_parameter,NUM_POINTS,N,UB_p,LB_p=function_data();
+	@variable(model,p[1:NUM_POINTS])
+	@constraint(model, p .>= LB_p)
+	@constraint(model, p .<= UB_p)
+	@variable(model, tau)
+	@objective(model, Max,tau)
+	@NLconstraint(model,tau<= sum(sum((exp(Beta_parameter[i,n]*p[i]+q_parameter[i,n])/(1+ sum(exp(Beta_parameter[j,n]*p[j]+q_parameter[j,n]) for j=2:NUM_POINTS))) for n=1:N) for i=1:NUM_POINTS) )
+
+	sol_scip=JuMP.optimize!(model)
+	total_time_scip = MOI.get(model, MOI.SolveTime())
+	status_scip=termination_status(model);
+	gap_scip=relative_gap(model);
+	return total_time_scip, status_scip, gap_scip, value.(p)
+end
+function Mixed_Logit_distribution(p::Vector,β,i)
 	#component of the continous mixed logit inside the integral
 	#p is the cost Vector
 	#β is the random variable used in the continous mixed logit
 	#i is the index of the alternative service
 
-	Beta_parameter,q_parameter,NUM_POINTS,N,UB_p,LB_p=Mixed_Logit_10(β);# given β, reading the data.
+	Beta_parameter,q_parameter,NUM_POINTS,N,UB_p,LB_p=Mixed_Logit_50(β);# given β, reading the data.
 	NUM_POINTS=size(p,1);
-	μ=[-0.788;-32.3];# mean of the random varialbe
-	Σ=[1.06 12/8;12/8 14.12];# covariance matrix of the random varialbe
 	f=zeros(N,1);
 	# for each customer, calculate the component function
 	for n=1:N
 		f[n]=(exp(Beta_parameter[i,n]*p[i]+q_parameter[i,n])/ sum(exp(Beta_parameter[j,n]*p[j]+q_parameter[j,n]) for j=1:NUM_POINTS));
 	end
 	
-	return sum(f[n] for n=1:N)*pdf(MvNormal(μ, Σ), β)
+	μ=[-0.788;-32.3];# mean of the random varialbe
+	Σ=[(1.06)^2 -12.8;-12.8 (14.2)^2];# covariance matrix of the random varialbe
+	return sum(f[n] for n=1:N)*pdf(MvNormal(μ, Σ), β) #continuous
+
 end
 function Mixed_logit_function_i(p::Vector, i)
 	#component of the continous mixed logit related to the integral
@@ -116,6 +164,7 @@ function Mixed_logit_function_i(p::Vector, i)
 	a=[-3.6;-68.52];# lowerbounds on the integral
 	b=[1.94;3.92];#upperbounds on the integral
 
+	## using Cuba
 	f=cuhre((x,val)->val[1]=Mixed_Logit_distribution(p,a+x.*(b-a) ,i),2,1)# calculating the integral
 	return 1/(prod(b-a)*sum(f[1]));#sum is to make the value scalar
 end
@@ -123,6 +172,32 @@ function Mixed_logit_function(p::Vector)
 	#calculating the objective function with respect to the continuous mixed logit
 	# p is the vector of prices
 	return sum(p[i]/Mixed_logit_function_i(p, i) for  i=1:NUM_POINTS)
+end
+function Mixed_logit_function_i_discreteDis(p::Vector, i)
+	#component of the discrete mixed logit related to the integral
+	#p is the cost Vector
+	#i is the index of the alternative service
+	a=[-3.6;-68.52];# lowerbounds on the integral
+	b=[1.94;3.92];#upperbounds on the integral
+	R=10;
+	f=zeros(N,R,R);
+	for n=1:N
+
+		for i_1=1:R
+			for i_2=1:R
+				β=[a[1]+(i_1-1)*((b[1]-a[1])/R); a[2]+(i_2-2)*((b[2]-a[2])/R)];
+				Beta_parameter,q_parameter,NUM_POINTS,N,UB_p,LB_p=Mixed_Logit_50(β);#
+				# for each customer, calculate the component function
+				f[n,i_1,i_2]=(prod(b-a)/(R^2))*(exp(Beta_parameter[i,n]*p[i]+q_parameter[i,n])/ sum(exp(Beta_parameter[j,n]*p[j]+q_parameter[j,n]) for j=1:NUM_POINTS))*pdf(MvNormal(μ, Σ), β);
+			end
+		end
+	end
+	return 1/sum(f)
+end
+function Mixed_logit_function_discreteDis(p::Vector)
+	#calculating the objective function with respect to the discrete mixed logit
+	# p is the vector of prices
+	return sum(p[i]/Mixed_logit_function_i_discreteDis(p, i) for  i=1:NUM_POINTS)
 end
 function Mixed_logit_function_nlopt(p::Vector, grad::Vector)
 	# the objective function used in NLopt package for continuous mixed logit
@@ -150,29 +225,16 @@ function cuts(Scenario)
 	end
 	return -A,-b;
 end
-function Distribution_function_NLopt(p::Vector, grad::Vector)
-	# the objective function used in NLopt package for discrete mixed logit
-	if length(grad) > 0 #gradient calculations
-		g = x -> FiniteDiff.finite_difference_gradient(Distribution_function, x);
-		grad=g(p);
-	end
-	return sum( p[i]*( exp(Beta_parameter[i,n]*p[i]+q_parameter[i,n])/(sum(exp(Beta_parameter[j,n]*p[j]+q_parameter[j,n]) for j=1:NUM_POINTS)))  for n=1:N, i=2:NUM_POINTS)
-end
 
-function Distribution_function_i(p::Vector,i)
-	# objective fucntion of the discrete mixed logit
-	f= 1/sum(1/sum(exp((Beta_parameter[j,n]*p[j]-Beta_parameter[i,n]*p[i])+q_parameter[j,n]-q_parameter[i,n]) for j=1:NUM_POINTS) for n=1:N); 
-	return f;
-end
 
 function solve_local_opt(type_of_problem,time_limit)
 	#returning the optimal value by conducting branching
-	# type_of_problem is whether the problem is "Mixed" (for continuous mixed logit problem), or "MNL" (for multinomial logit problem),
+	# type_of_problem is whether the problem is "Mixed" (for continuous mixed logit problem), "MNL" (for multinomial logit problem), or "Discrete" (for discrete mixed logit)
 	#time_limit is the time limit in seconds
 	iteration_history=[-Inf Inf 0];
 	break_points=[Float64.(LB_p)];
 	push!(break_points,UB_p);
-	Tolerr=0.0001;
+	Tolerr=0.00001;
 	best_solution=[];
 	bestf=-Inf;
 	best_old=-Inf;
@@ -195,6 +257,7 @@ function solve_local_opt(type_of_problem,time_limit)
 	while abs(bestf-Upperbound_value)>Tolerr &&time_elapsed<time_limit
 		display("====================New_branch======================")
 		iteration_history=[iteration_history; bestf Upperbound_value time_elapsed];
+
 		CPUtic()
 		best_old=copy(bestf);
 		#split the feasible reagon
@@ -231,7 +294,7 @@ function solve_local_opt(type_of_problem,time_limit)
 					status[i,j]=1;
 				end
 				time_elapsed=time_elapsed+CPUtoq();
-				display("==Number of points $(m_break)===========Remaining node $((m_break-i)*(Num_breaks_prev)+Num_breaks_prev-j)========$(bestf)==========$(Upperbound_value) ===================$time_elapsed===")
+				display("==Number of points $(m_break)===========Remaining node $((m_break-i)*(Num_breaks_prev)+Num_breaks_prev-j)========$(bestf)==========$(Upperbound_value) ========$best_solution===========$time_elapsed===")
 				if status[i,j]==1 && time_elapsed<time_limit
 					CPUtic()
 					if type_of_problem=="MNL" 
@@ -240,6 +303,11 @@ function solve_local_opt(type_of_problem,time_limit)
 					elseif type_of_problem=="Mixed" 
 						obj_fun=Mixed_logit_function;
 						obj_fun_i=Mixed_logit_function_i;
+					elseif type_of_problem == "Discrete"
+						# obj_fun=discrete_Mixed_logit_function;
+						# obj_fun_i=discrete_Mixed_logit_function_i;
+						obj_fun=Mixed_logit_function_discreteDis;
+						obj_fun_i=Mixed_logit_function_i_discreteDis;
 					end
 					#finding the lower bound
 					Bestf_leaf[i,j],Best_solution_leaf[i,j]=trust_region_iteration(A_leaf[i,j],b_leaf[i,j],Tolerr,obj_fun,initial_point,time_limit-time_elapsed)
@@ -267,7 +335,7 @@ function solve_local_opt(type_of_problem,time_limit)
 						if Bestf_leaf[i,j]>=bestf
 							bestf=copy(Bestf_leaf[i,j]);
 							best_solution=copy(Best_solution_leaf[i,j]);
-							display("===========$(bestf)==========$(Upperbound_value) ===================$time_elapsed====")
+							display("===========$(bestf)==========$(Upperbound_value) ================$best_solution===========$time_elapsed====")
 							iteration_history=[iteration_history; bestf Upperbound_value time_elapsed];
 						end
 						#terminate branching if the upperbound is at most the same as the best found solution's objective function
@@ -275,9 +343,6 @@ function solve_local_opt(type_of_problem,time_limit)
 							status[i,j]=0;# we don't further branch this leaf as we can't get a better solution there
 						end
 						##
-
-						
-
 						#checking whether the found solution is among the existence points, if not put it in the set 
 						CPUtic()
 						m_break_help=size(break_points,1);
@@ -361,7 +426,7 @@ function solve_local_opt(type_of_problem,time_limit)
 		end
 
 		time_elapsed=time_elapsed+CPUtoq();
-		display("===========$(bestf)==========$(Upperbound_value) ===================$time_elapsed====")
+		display("===========$(bestf)==========$(Upperbound_value) =======$best_solution============$time_elapsed====")
 		
 	end
 	return bestf,best_solution,Upperbound_value,iteration_history;
@@ -417,7 +482,9 @@ function randomPoint(A,b,p_0,LB_p,UB_p)
 	NUM_POINTS=size(A,2);
 	constraint_size=size(A,1);
 	c=rand(NUM_POINTS,1)-0.5*ones(NUM_POINTS,1);
-	rand_point = Model(solver=CplexSolver(CPX_PARAM_SCRIND=0,CPX_PARAM_PERIND=0));
+	rand_point = Model(CPLEX.Optimizer);
+	set_optimizer_attribute(rand_point,"CPX_PARAM_SCRIND",0);
+	set_optimizer_attribute(rand_point,"CPX_PARAM_PERIND",0);
     @variable(rand_point,p[1:NUM_POINTS]);
     if Right_side==1
 	    @constraint(rand_point,p[ind[1]]<=LB_p[ind[1]]+round((UB_p[ind[1]]-LB_p[ind[1]])/2,digits=4));
@@ -430,16 +497,18 @@ function randomPoint(A,b,p_0,LB_p,UB_p)
 	else
 		@objective(rand_point,Max,sum( c'*p));
 	end
-    sol=solve(rand_point);
-    if sol == :Optimal
-	    initial_p=getvalue(p)[:];
+    sol=JuMP.optimize!(rand_point);
+    if termination_status(rand_point)==MOI.OPTIMAL
+	    initial_p=value.(p)[:];
 	else
-		rand_point = Model(solver=CplexSolver(CPX_PARAM_SCRIND=0,CPX_PARAM_PERIND=0));
+		rand_point = Model(CPLEX.Optimizer);
+		set_optimizer_attribute(rand_point,"CPX_PARAM_SCRIND",0);
+		set_optimizer_attribute(rand_point,"CPX_PARAM_PERIND",0);
 	    @variable(rand_point,p[1:NUM_POINTS]);
 	    @constraint(rand_point,A*p.>=b)
 	    @objective(rand_point,Max,sum( c'*p));
-	    sol=solve(rand_point);
-		initial_p=getvalue(p)[:];
+	    sol=JuMP.optimize!(rand_point);
+		initial_p=value.(p)[:];
 	end
     return round.(initial_p,digits=4)
 end
@@ -477,7 +546,10 @@ function overestimator_general(A,b,P_0,obj_fun,LB_τ,UB_τ,LB_p,UB_p,N,time_limi
 	LB_f=round.(LB_f,digits=4);
 	UB_f=round.(UB_f,digits=4);
 
-	LP=Model(solver=CplexSolver(CPX_PARAM_SCRIND=0,CPX_PARAM_PERIND=0,CPX_PARAM_TILIM=time_limit));
+	LP = Model(CPLEX.Optimizer);
+	set_optimizer_attribute(LP,"CPX_PARAM_SCRIND",0);
+	set_optimizer_attribute(LP,"CPX_PARAM_PERIND",0);
+	set_optimizer_attribute(LP,"CPX_PARAM_TILIM",time_limit);
 	P_size=size(A,2);
 	@variable(LP, W[1:P_size,1:P_size]>=0);
 	@variable(LP, τ[1:P_size]>=0)
@@ -545,11 +617,11 @@ function overestimator_general(A,b,P_0,obj_fun,LB_τ,UB_τ,LB_p,UB_p,N,time_limi
 		end
 	end
 	@objective(LP,Max,sum(W[i,i] for i=2:P_size))
-	sol=solve(LP);
-	if sol== :Infeasible || sol == :CPX_STAT_ABORT_DUAL_OBJ_LIM
+	sol=JuMP.optimize!(LP);
+	if termination_status(LP)== MOI.INFEASIBLE 
 		return "solved"# this is because the infeasibility comes from rounding errors
 	end
-	W=getvalue(W);
+	W=value.(W);
 	return sum(W[i,i] for i=2:P_size)
 end
 
@@ -559,21 +631,24 @@ function trust_region(P_k,obj_fun::Function,A,b,radius,time_limit)
 	# P_k is the obtained feasible solution in the previous round
 	# radius shows the size of the ball
 	P_size=size(A,2);
-	Model_k=Model(solver=CplexSolver(CPX_PARAM_SCRIND=0,CPX_PARAM_PERIND=0,CPX_PARAM_TILIM=time_limit));
+	Model_k = Model(CPLEX.Optimizer);
+	set_optimizer_attribute(Model_k,"CPX_PARAM_SCRIND",0);
+	set_optimizer_attribute(Model_k,"CPX_PARAM_PERIND",0);
+	set_optimizer_attribute(Model_k,"CPX_PARAM_TILIM",time_limit);
 	@variable(Model_k,p[1:P_size])
 	@constraint(Model_k,A*p.>=b)
 	function g(x)
 		return FiniteDiff.finite_difference_gradient(obj_fun, x);# gradient function
 	end
 	@objective(Model_k,Max,sum((g(P_k)).*(p)));
-	@variable(Model_k, auxABS[1:P_size]);
+	@variable(Model_k, auxABS[1:P_size]>=0);
 	@constraint(Model_k, sum(auxABS)<=radius)
 	for i=1:P_size
 		@constraint(Model_k, auxABS[i]>=p[i]-P_k[i])
 		@constraint(Model_k, -auxABS[i]<=p[i]-P_k[i])
 	end
-	solve(Model_k)
-	P_new=getvalue(p);
+	JuMP.optimize!(Model_k)
+	P_new=value.(p);
 	return P_new
 end
 
@@ -591,22 +666,26 @@ function bound_identifier(A,b,obj_fun::Function,N,time_limit)
 	UB_p=zeros(P_size);
 	p_init=zeros(P_size,1);
 	for i=1:P_size
-		LP=Model(solver=CplexSolver(CPX_PARAM_SCRIND=0,CPX_PARAM_PERIND=0));
+		LP = Model(CPLEX.Optimizer);
+		set_optimizer_attribute(LP,"CPX_PARAM_PERIND",0);
+		set_optimizer_attribute(LP,"CPX_PARAM_SCRIND",0);
 		@variable(LP, p[1:P_size]>=0)
 		@constraint(LP, A*p.>=b)
 		@objective(LP,Max,p[i])
-		sol=solve(LP)
-		if sol==:Infeasible ||sol==:CPX_STAT_ABORT_DUAL_OBJ_LIM || sol== :CPX_STAT_NUM_BEST 
+		sol=JuMP.optimize!(LP)
+		if termination_status(LP)== MOI.INFEASIBLE
 			return "solved","solved","solved","solved";
 		end
-		UB_p[i]=getvalue(p)[i];
-		LP=Model(solver=CplexSolver(CPX_PARAM_SCRIND=0,CPX_PARAM_PERIND=0));
+		UB_p[i]=value.(p)[i];
+		LP = Model(CPLEX.Optimizer);
+		set_optimizer_attribute(LP,"CPX_PARAM_PERIND",0);
+		set_optimizer_attribute(LP,"CPX_PARAM_SCRIND",0);
 		@variable(LP, p[1:P_size]>=0)
 		@constraint(LP, A*p.>=b)
 		@objective(LP,Min,p[i])
-		sol=solve(LP)
-		p_init=getvalue(p);
-		LB_p[i]=getvalue(p)[i];
+		sol=JuMP.optimize!(LP)
+		p_init=value.(p);
+		LB_p[i]=value.(p)[i];
 	end
 	#we know that τ_in = 1/f_in. So, to find the min we can minize 1/f_in, as it is convex, and to find the
 	#max we can simply minimize f_in and then use the argmin as the argmax for τ. To solve the convex min we use ipopt
@@ -626,13 +705,14 @@ function bound_identifier(A,b,obj_fun::Function,N,time_limit)
 end
 
 
-function solve_nlopt()
+function solve_nlopt(time_limit)
 	#solving the problem using NLopt
-	opt = Opt(:GN_ESCH, P_size);
+	P_size=size(Beta_parameter,1);
+	opt = Opt(:GN_DIRECT_L, P_size);
 	opt.lower_bounds = LB_p;
 	opt.upper_bounds = UB_p;
-	opt.maxtime= 61200;
+	opt.maxtime= time_limit;
 	opt.max_objective = Mixed_logit_function_nlopt
-	t=@timed (minf,p,ret) = optimize(opt, [0;0;0])
+	t=@timed (minf,p,ret) = NLopt.optimize(opt, [0;0;0])
 	return t
 end
